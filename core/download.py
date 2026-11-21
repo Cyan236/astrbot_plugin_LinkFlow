@@ -327,17 +327,23 @@ class Downloader:
         return {"cdn": True, "range": True, "compress": True}
 
     def _auto_parts(self, size: int) -> int:
-        """根据文件大小自动分配分块数"""
-        if size < 10 * 1024 * 1024:
+        """根据文件大小自动分配分块数（约每块 7~12MB）。
+
+        2026-11-17: 原档位把 36MB 判成 2 块，导致配置的
+        range_download_max_parts=5 形同虚设，2 块并发收益被预分配+
+        两次磁盘IO吃掉。改为按块大小递增，让中等文件用满配置上限。
+        """
+        mb = size / 1024 / 1024
+        if mb < 10:
             return 1
-        if size < 50 * 1024 * 1024:
-            return 2
-        if size < 100 * 1024 * 1024:
+        if mb < 25:
             return 3
-        if size < 500 * 1024 * 1024:
-            return 4
-        if size < 1024 * 1024 * 1024:
+        if mb < 60:
+            return 5
+        if mb < 150:
             return 6
+        if mb < 400:
+            return 8
         return 8
 
     def _effective_max_parts(self, platform: str | None, file_size: int) -> int:
@@ -635,6 +641,8 @@ class Downloader:
                         raise ClientError(f"HTTP {response.status}")
 
                     write_offset = start + downloaded
+                    # 进度日志: 每 25% 报一次, 让分块内部不再黑盒
+                    next_report = max(1, part_size // 4)
                     async with aiofiles.open(tmp_path, "wb") as tmpf:
                         await tmpf.seek(downloaded)
                         received = 0
@@ -642,6 +650,15 @@ class Downloader:
                             await tmpf.write(chunk)
                             received += len(chunk)
                             downloaded += len(chunk)
+                            if downloaded >= next_report:
+                                pct = min(100, downloaded * 100 // part_size)
+                                self.cfg.verbose(
+                                    f"[RangeDownload] 进度 {file_path.name} "
+                                    f"part_{part_idx} {pct}% "
+                                    f"({downloaded / 1024 / 1024:.2f}/"
+                                    f"{part_size / 1024 / 1024:.2f}MB)"
+                                )
+                                next_report += max(1, part_size // 4)
                     # 写入最终文件
                     async with aiofiles.open(file_path, "r+b") as f:
                         await f.seek(write_offset)

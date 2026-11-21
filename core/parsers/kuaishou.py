@@ -3,6 +3,7 @@ import time
 from asyncio import sleep
 from random import choice
 from typing import ClassVar, TypeAlias
+import urllib.parse
 from urllib.parse import quote
 
 import aiohttp
@@ -81,6 +82,19 @@ class KuaiShouParser(BaseParser):
             (d.photo for d in init_state.values() if d.photo is not None), None
         )
         if photo is None:
+            # H5 无登录态时, "仅App可见/好友分享"作品官方返回 223(话术是
+            # "作品可能已被删除或尚未上传"), 但平板 App 登录着本人号且和作者
+            # 互关, 用字符串ID走原生深链能拿到 info2(已实测)。这里优先尝试
+            # 原生兜底; 成功直接返回结果, 失败再透出官方错误。
+            native = await self._parse_via_native(url, real_url)
+            if native is not None:
+                return native
+            # 作品被删/未上传时官方把原因放在 error_msg(result=223等), 透出来便于区分死链
+            official_err = next(
+                (d.error_msg for d in init_state.values() if d.error_msg), None
+            )
+            if official_err:
+                raise ParseException(f"快手官方: {official_err}")
             raise ParseException("window.init_state don't contains videos or pics")
 
         # 简洁的构建方式
@@ -172,6 +186,164 @@ class KuaiShouParser(BaseParser):
             author=author,
             contents=contents,
             timestamp=photo.timestamp // 1000,
+            extra={
+                "like": photo.like_count,
+                "comment": photo.comment_count,
+                "share": photo.forward_count,
+                "view": photo.view_count,
+            },
+        )
+
+    @staticmethod
+    def _extract_str_id(real_url: str) -> str | None:
+        """从重定向后的真实 URL 提取作品字符串ID。
+
+        快手分享短链重定向后形如:
+          https://v.m.chenzhongtech.com/fw/photo/3xkut4i6iwjktj4
+          https://www.kuaishou.com/short-video/3xkut4i6iwjktj4
+        "仅App可见"作品 H5 拿不到数字 photoId, 但这个字符串ID始终在 URL 里,
+        可直接喂给原生深链 ksnebula://work/{字符串ID}(已实测能打开并拿到 info2)。
+        """
+        # 优先取 query 里的 photoId(分享链固定有), 再退回路径正则
+        try:
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(real_url).query)
+            pid = (q.get("photoId") or q.get("photo_id") or [""])[0]
+            if pid and re.fullmatch(r"[A-Za-z0-9]+", pid):
+                return pid
+        except Exception:  # noqa: BLE001
+            pass
+        patterns = [
+            r"/fw/(?:photo|long-video)/([A-Za-z0-9]+)",
+            r"/short-video/([A-Za-z0-9]+)",
+            r"/fw/([A-Za-z0-9]{8,})",
+        ]
+        for pat in patterns:
+            m = re.search(pat, real_url)
+            if m:
+                return m.group(1)
+        return None
+
+    async def _fetch_native_photo_raw(self, str_id: str) -> dict | None:
+        """调原生代发服务拿字符串ID作品的完整数据(含原始 photo 对象)。
+
+        GET {live_photo_native_url}/live_photo?photo_id=<字符串ID>
+        服务端放行字符串ID: 深链 -> App 请求 info2 -> 按真实数字ID缓存,
+        并通过「字符串ID->数字ID」别名命中返回(见 ks_live_server.py)。
+        """
+        native_url = (self.mycfg.live_photo_native_url or "").strip()
+        if not native_url:
+            return None
+        api = f"{native_url.rstrip('/')}/live_photo?photo_id={quote(str_id, safe='')}"
+        try:
+            async with self.session.get(
+                api,
+                headers=self.ios_headers,
+                proxy=self.proxy,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status >= 400:
+                    return None
+                data = await resp.json(content_type=None)
+        except Exception:  # noqa: BLE001
+            return None
+        if not isinstance(data, dict) or data.get("result") != 1:
+            logger.info(f"[快手] 原生兜底未命中字符串ID {str_id}: result={data.get('result') if isinstance(data, dict) else None}")
+            return None
+        if not data.get("raw"):
+            return None
+        return data
+
+    async def _parse_via_native(self, page_url: str, real_url: str):
+        """H5 拿不到 photo 时的原生兜底: 用字符串ID走 App 深链拿完整数据。
+
+        "仅App可见/好友分享"作品: 浏览器(含带cookie)一律 223, 只有登录着
+       本人号的快手 App 能看。平板 App 深链会请求 info2, 服务端把原始 photo
+       对象(raw)回传, 这里据此构造与 H5 路径等价的解析结果。
+
+        任何环节失败返回 None, 由调用方回落官方错误提示。
+        """
+        str_id = self._extract_str_id(real_url)
+        if not str_id:
+            return None
+        data = await self._fetch_native_photo_raw(str_id)
+        if not data:
+            return None
+        raw = data["raw"]
+        # info2 原始字段是 snake_case(user_name/like_count/cover_urls/headurls),
+        # 而 Photo Struct 用 camelCase(userName/likeCount/coverUrls/headUrl),
+        # 直接 convert 会静默丢字段。这里显式映射(ext_params 不传, 用默认空:
+        # 实况直链已由 data.images 提供, 不依赖 H5 的 atlas/single 判断)。
+        head = None
+        for h in (raw.get("headurls") or []):
+            if isinstance(h, dict) and h.get("url"):
+                head = h["url"]
+                break
+        mapped = {
+            "caption": raw.get("caption") or "",
+            "timestamp": raw.get("timestamp") or 0,
+            "userName": raw.get("user_name") or "未知用户",
+            "headUrl": head,
+            "coverUrls": [c for c in (raw.get("cover_urls") or []) if isinstance(c, dict) and c.get("url")],
+            "likeCount": raw.get("like_count"),
+            "commentCount": raw.get("comment_count"),
+            "forwardCount": raw.get("forward_count") or raw.get("share_count"),
+            "viewCount": raw.get("view_count"),
+        }
+        try:
+            photo: Photo = msgspec.convert(mapped, Photo, strict=False)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[快手] 原生兜底 photo 结构解码失败: {e}")
+            return None
+
+        contents = []
+        send_live_video = self.mycfg.live_photo_send_video is not False
+        send_image = self.mycfg.live_photo_send_image is not False
+
+        # 原生 images 已是 App 真相: is_live=true 的直接用 live_url 出实况视频,
+        # 静态条目出图(static_url + 备选CDN), 不依赖 H5 的 is_live_photo 标记。
+        images = data.get("images") or []
+        live_urls: list[str] = []
+        static_items: list[tuple[str, list[str]]] = []
+        for img in images:
+            if not isinstance(img, dict):
+                continue
+            if img.get("is_live") and img.get("live_url"):
+                live_urls.append(img["live_url"])
+            elif img.get("static_url"):
+                bk = [u for u in (img.get("static_backups") or []) if u]
+                static_items.append((img["static_url"], bk))
+
+        # 视频作品(main_mv_urls)优先: 与 H5 路径一致
+        if video_url := photo.video_url:
+            contents.append(
+                self.create_video_content(
+                    video_url, photo.cover_url, photo.duration, headers=self.ios_headers
+                )
+            )
+        # 实况视频
+        if live_urls and send_live_video:
+            contents.extend(
+                self.create_dynamic_contents(live_urls, headers=self.ios_headers)
+            )
+        # 静态图
+        if static_items and send_image:
+            contents.extend(
+                self.create_image_content(u, headers=self.ios_headers, candidates=bk or None)
+                for u, bk in static_items
+            )
+
+        author = self.create_author(
+            photo.name, photo.head_url, headers=self.ios_headers
+        )
+        logger.info(
+            f"[快手] 原生兜底成功: {str_id} -> {data.get('photo_id')} "
+            f"mtype={data.get('mtype')} 实况{len(live_urls)} 静态{len(static_items)}"
+        )
+        return self.result(
+            title=photo.caption,
+            author=author,
+            contents=contents,
+            timestamp=(photo.timestamp or 0) // 1000,
             extra={
                 "like": photo.like_count,
                 "comment": photo.comment_count,
@@ -290,8 +462,9 @@ class KuaiShouParser(BaseParser):
                 headers=self.ios_headers,
                 proxy=self.proxy,
                 # 服务端深链触发+等 info2 典型 ~1s, App 冷启动最坏 ~20s;
-                # 插件侧 8s 封顶, 超时即回落三方接口链
-                timeout=aiohttp.ClientTimeout(total=8),
+                # 服务端 WAIT_TIMEOUT=20s, 插件侧必须更宽(25s), 否则插件先
+                # 断开 -> 服务端写响应时 BrokenPipeError, 且实况图被误降级。
+                timeout=aiohttp.ClientTimeout(total=25),
             ) as resp:
                 if resp.status >= 400:
                     return []
@@ -509,6 +682,7 @@ class Photo(Struct):
 class TusjohData(Struct):
     result: int
     photo: Photo | None = None
+    error_msg: str | None = None
 
 
 KuaishouInitState: TypeAlias = dict[str, TusjohData]

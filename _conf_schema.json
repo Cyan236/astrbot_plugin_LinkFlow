@@ -1458,7 +1458,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。AI总结/大会员高清画质需登录态。浏览器登录 bilibili.com → F12 Network → 复制任意请求的 Cookie 整段；须含 SESSDATA、bili_jct（刷新凭证另需 ac_time_value）。",
                         "type": "text",
                         "default": ""
                     },
@@ -1549,7 +1549,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。匿名 ttwid 会自动注册；仅看登录专属/私密作品需填。浏览器登录 douyin.com → F12 → 复制 Cookie 请求头整段。",
                         "type": "text",
                         "default": ""
                     },
@@ -1592,7 +1592,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "私密/仅互关可见作品必填！无登录态会报「作品可能已被删除或尚未上传」(result=223)。浏览器登录 v.kuaishou.com → F12 Network → 复制任意请求的 Cookie 请求头整段粘贴于此。",
                         "type": "text",
                         "default": ""
                     },
@@ -1708,7 +1708,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。看登录专属/私密微博时填。登录 weibo.com → F12 → 复制 Cookie 整段，建议含 SUB。",
                         "type": "text",
                         "default": ""
                     },
@@ -1751,7 +1751,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填, 小红书部分链接解析有水印, 填充Cookies可去除水印",
+                        "hint": "选填。部分链接带水印，填登录态可去水印。登录 xiaohongshu.com → F12 → 复制 Cookie 整段（web_session、a1）。",
                         "type": "text",
                         "default": ""
                     },
@@ -1794,7 +1794,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。部分内容需登录态。登录 xiaoheihe.cn → F12 → 复制 Cookie 整段，须含 x_xhh_tokenid。",
                         "type": "text",
                         "default": ""
                     },
@@ -1854,7 +1854,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "必填! 否则无法解析知乎内容",
+                        "hint": "必填，否则无法解析知乎内容。登录 zhihu.com → F12 → 复制 Cookie 请求头整段。",
                         "type": "text",
                         "default": ""
                     },
@@ -1897,7 +1897,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。登录 tiktok.com → F12 → 复制 Cookie 请求头整段（供 yt-dlp 使用）。",
                         "type": "text",
                         "default": ""
                     },
@@ -1940,7 +1940,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "必填! 同时注意油管Cookie有效期较短",
+                        "hint": "必填。登录 youtube.com → F12 → 复制 Cookie 请求头整段（供 yt-dlp 使用），有效期短需定期更新。",
                         "type": "text",
                         "default": ""
                     },
@@ -1983,7 +1983,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "必填",
+                        "hint": "必填。登录 instagram.com → F12 → 复制 Cookie 请求头整段（供 yt-dlp 使用）。",
                         "type": "text",
                         "default": ""
                     },
@@ -2026,7 +2026,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。登录 x.com → F12 → 复制 Cookie 请求头整段（供 yt-dlp 使用）。",
                         "type": "text",
                         "default": ""
                     },
@@ -2069,7 +2069,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。登录 acfun.cn → F12 → 复制 Cookie 整段。",
                         "type": "text",
                         "default": ""
                     },
@@ -2112,7 +2112,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。登录 music.163.com → F12 → 复制 Cookie 整段。",
                         "type": "text",
                         "default": ""
                     },
@@ -2155,7 +2155,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。登录 nga.178.com → F12 → 复制 Cookie 整段。",
                         "type": "text",
                         "default": ""
                     },
@@ -2198,7 +2198,7 @@
                     },
                     "cookies": {
                         "description": "Cookies",
-                        "hint": "选填",
+                        "hint": "选填。登录 iwara.tv → F12 → 复制 Cookie 整段。",
                         "type": "text",
                         "default": ""
                     },
