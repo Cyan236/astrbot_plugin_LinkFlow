@@ -1520,6 +1520,23 @@
                             "step": 1
                         },
                         "default": 0
+                    },
+                    "multi_page_analysis": {
+                        "description": "多片分析",
+                        "hint": "开启后一个视频链接会解析并发送全部分P（如 on/off vocal 两个分P），不再只取第一P。关闭时只取分享链接指向的那一P。",
+                        "type": "bool",
+                        "default": false
+                    },
+                    "multi_page_max": {
+                        "description": "多片分析上限",
+                        "hint": "多片分析开启时最多解析多少个分P，0表示不限制（全部）。用于防止分P过多刷屏。",
+                        "type": "int",
+                        "slider": {
+                            "min": 0,
+                            "max": 50,
+                            "step": 1
+                        },
+                        "default": 0
                     }
                 }
             },

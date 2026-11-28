@@ -159,6 +159,8 @@ class ParserItem(ConfigNode):
     video_send_mode: str | None
     video_codec_list: list | None
     video_quality: str | None
+    multi_page_analysis: bool | None
+    multi_page_max: int | None
     nsfw: str | None
     # 快手实况图(动态图)解析
     live_photo_enabled: bool | None

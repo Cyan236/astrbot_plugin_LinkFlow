@@ -1,6 +1,7 @@
 import asyncio
 from re import Match
 from typing import ClassVar
+from urllib.parse import parse_qs, urlparse
 
 from bilibili_api import request_settings, select_client
 from bilibili_api.opus import Opus
@@ -88,6 +89,20 @@ class BilibiliParser(BaseParser):
         url = f"https://{searched.group(0)}"
         return await self.parse_with_redirect(url)
 
+    @staticmethod
+    def _pick_page_num(searched: Match[str]) -> int:
+        """取分P号：优先 URL 里任意位置的 p 参数，其次正则捕获，最后默认 1。"""
+        # 短链重定向后 p= 常夹在一堆分享参数中间（...&p=2&...），正则只认紧跟 BV 的 ?p=
+        try:
+            whole_url = searched.string
+            if "?" in whole_url:
+                p = parse_qs(urlparse(whole_url).query).get("p", [None])[0]
+                if p and p.isdigit():
+                    return int(p)
+        except (ValueError, TypeError):
+            pass
+        return int(searched.group("page_num") or 1)
+
     @handle("BV", r"^(?P<bvid>BV[0-9a-zA-Z]{10})(?:\s)?(?P<page_num>\d{1,3})?$")
     @handle(
         "/BV",
@@ -96,7 +111,7 @@ class BilibiliParser(BaseParser):
     async def _parse_bv(self, searched: Match[str]):
         """解析视频信息"""
         bvid = str(searched.group("bvid"))
-        page_num = int(searched.group("page_num") or 1)
+        page_num = self._pick_page_num(searched)
 
         return await self.parse_video(bvid=bvid, page_num=page_num)
 
@@ -122,7 +137,7 @@ class BilibiliParser(BaseParser):
     async def _parse_av(self, searched: Match[str]):
         """解析视频信息"""
         avid = int(searched.group("avid"))
-        page_num = int(searched.group("page_num") or 1)
+        page_num = self._pick_page_num(searched)
 
         return await self.parse_video(avid=avid, page_num=page_num)
 
@@ -181,10 +196,65 @@ class BilibiliParser(BaseParser):
         text = f"简介: {video_info.desc}" if video_info.desc else None
         # up
         author = self.create_author(video_info.owner.name, video_info.owner.face)
-        # 处理分 p
-        page_info = video_info.extract_info_with_page(page_num)
 
-        # 获取 AI 总结（默认提示）
+        # ---- 多片分析：遍历所有分P，并发下载后合并转发 ----
+        multi = bool(getattr(self.mycfg, "multi_page_analysis", False))
+        multi_max = int(getattr(self.mycfg, "multi_page_max", 0) or 0)
+        total_pages = len(video_info.pages) if video_info.pages else 1
+        if multi and total_pages > 1:
+            page_nums = list(range(1, total_pages + 1))
+            if multi_max > 0:
+                page_nums = page_nums[:multi_max]
+            logger.info(
+                f"[Bilibili] 多片分析开启: {video_info.bvid} 共 {total_pages} P, 本次解析 {len(page_nums)} P"
+            )
+        else:
+            page_nums = [page_num]
+
+        async def prepare_page(pn: int):
+            """并发解析单个分P：拿下载链接 + 启下载 task，返回 (VideoContent, PageInfo)"""
+            pi = video_info.extract_info_with_page(pn)
+            output_path = self.cfg.cache_dir / f"{video_info.bvid}-{pn}.mp4"
+
+            async def download_video():
+                if output_path.exists():
+                    return output_path
+                if pi.duration > self.cfg.max_duration:
+                    raise DurationLimitException
+                v_url, a_url = await self.extract_download_urls(
+                    video=video, page_index=pi.index
+                )
+                if a_url is not None:
+                    return await self.downloader.download_av_and_merge(
+                        v_url,
+                        a_url,
+                        output_path=output_path,
+                        headers=self.headers,
+                        proxy=self.proxy,
+                        platform=self.platform.name,
+                    )
+                else:
+                    return await self.downloader.streamd(
+                        v_url,
+                        file_name=output_path.name,
+                        headers=self.headers,
+                        proxy=self.proxy,
+                        platform=self.platform.name,
+                    )
+
+            task = asyncio.create_task(download_video())
+            return (
+                self.create_video_content(task, pi.cover, pi.duration),
+                pi,
+            )
+
+        # 所有分P并发准备 + 并发下载（gather 保证全部 task 同时铺开）
+        built = await asyncio.gather(*(prepare_page(pn) for pn in page_nums))
+        video_contents = [c for c, _ in built]
+        # 标题/时间/AI总结取第一个解析的分P（多片时为第1P）
+        page_info = built[0][1]
+
+        # 获取 AI 总结（默认提示，仅首P）
         ai_summary = ""
         if self.login._credential:
             try:
@@ -196,50 +266,21 @@ class BilibiliParser(BaseParser):
                 ai_summary = "哔哩哔哩 cookie 未配置或失效, 无法使用 AI 总结"
 
         url = f"https://bilibili.com/{video_info.bvid}"
-        url += f"?p={page_info.index + 1}" if page_info.index > 0 else ""
+        if len(page_nums) == 1 and page_info.index > 0:
+            url += f"?p={page_info.index + 1}"
 
-        # 视频下载 task
-        async def download_video():
-            output_path = self.cfg.cache_dir / f"{video_info.bvid}-{page_num}.mp4"
-            if output_path.exists():
-                return output_path
-            v_url, a_url = await self.extract_download_urls(
-                video=video, page_index=page_info.index
-            )
-            if page_info.duration > self.cfg.max_duration:
-                raise DurationLimitException
-            if a_url is not None:
-                return await self.downloader.download_av_and_merge(
-                    v_url,
-                    a_url,
-                    output_path=output_path,
-                    headers=self.headers,
-                    proxy=self.proxy,
-                    platform=self.platform.name,
-                )
-            else:
-                return await self.downloader.streamd(
-                    v_url,
-                    file_name=output_path.name,
-                    headers=self.headers,
-                    proxy=self.proxy,
-                    platform=self.platform.name,
-                )
-
-        video_task = asyncio.create_task(download_video())
-        video_content = self.create_video_content(
-            video_task,
-            page_info.cover,
-            page_info.duration,
-        )
+        # 多片时标题标注分P数
+        title = page_info.title
+        if len(page_nums) > 1:
+            title = f"{video_info.title}（{len(page_nums)}P）"
 
         return self.result(
             url=url,
-            title=page_info.title,
+            title=title,
             timestamp=page_info.timestamp,
             text=text,
             author=author,
-            contents=[video_content],
+            contents=video_contents,
             extra={
                 "info": ai_summary,
                 "view": video_info.stat.view,
